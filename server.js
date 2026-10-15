@@ -1,120 +1,122 @@
 
 const express = require("express");
+const jwt = require("jsonwebtoken");
 
 const app = express();
 const PORT = 3000;
 
+// In-memory user storage for this lab
+const users = [];
+
+// Use an environment variable in real deployments
+const JWT_SECRET =
+  process.env.JWT_SECRET || "lab_secret_key_change_this";
+
 app.use(express.json());
 
-// Store student records in memory
-let students = [];
-let nextId = 1;
+// POST /register
+app.post("/register", (req, res) => {
+  const { username, password } = req.body || {};
 
-// POST /students - Create a student
-app.post("/students", (req, res) => {
-    const { name, email, age } = req.body;
+  if (
+    typeof username !== "string" ||
+    username.trim() === "" ||
+    typeof password !== "string" ||
+    password.length < 6
+  ) {
+    return res.status(400).json({
+      error: "Invalid input",
+    });
+  }
 
-    // Validate input
-    if (
-        typeof name !== "string" ||
-        name.trim() === "" ||
-        typeof email !== "string" ||
-        email.trim() === "" ||
-        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
-        typeof age !== "number" ||
-        !Number.isInteger(age) ||
-        age <= 0
-    ) {
-        return res.status(400).json({
-            error: "Invalid input"
-        });
-    }
+  const existingUser = users.find(
+    (user) => user.username === username
+  );
 
-    // Check for duplicate email (case-insensitive)
-    const duplicate = students.some(
-        student =>
-            student.email.toLowerCase() === email.trim().toLowerCase()
-    );
+  if (existingUser) {
+    return res.status(409).json({
+      error: "Username already exists",
+    });
+  }
 
-    if (duplicate) {
-        return res.status(409).json({
-            error: "Email already exists"
-        });
-    }
+  users.push({ username, password });
 
-    const student = {
-        id: nextId++,
-        name: name.trim(),
-        email: email.trim(),
-        age
-    };
-
-    students.push(student);
-
-    return res.status(201).json(student);
+  return res.status(201).json({
+    message: "User registered",
+  });
 });
 
-// GET /students - List all students
-// Optional query: /students?minAge=18
-app.get("/students", (req, res) => {
-    let result = students;
+// POST /login
+app.post("/login", (req, res) => {
+  const { username, password } = req.body || {};
 
-    if (req.query.minAge !== undefined) {
-        const minAge = req.query.minAge;
+  const user = users.find(
+    (u) => u.username === username && u.password === password
+  );
 
-        if (minAge.trim() === "" || !Number.isFinite(Number(minAge))) {
-            return res.status(400).json({
-                error: "Invalid input"
-            });
-        }
+  if (!user) {
+    return res.status(401).json({
+      error: "Invalid credentials",
+    });
+  }
 
-        result = students.filter(
-            student => student.age >= Number(minAge)
-        );
-    }
+  const token = jwt.sign(
+    { username: user.username },
+    JWT_SECRET,
+    { expiresIn: "1h" }
+  );
 
-    return res.status(200).json(result);
+  return res.status(200).json({ token });
 });
 
-// GET /students/:id - Fetch one student
-app.get("/students/:id", (req, res) => {
-    const id = Number(req.params.id);
+// Authentication middleware
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers.authorization;
 
-    if (!Number.isInteger(id) || id <= 0) {
-        return res.status(404).json({
-            error: "Student not found"
-        });
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({
+      error: "Unauthorized",
+    });
+  }
+
+  const token = authHeader.slice(7);
+
+  if (!token) {
+    return res.status(401).json({
+      error: "Unauthorized",
+    });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err || !decoded || typeof decoded.username !== "string") {
+      return res.status(401).json({
+        error: "Unauthorized",
+      });
     }
 
-    const student = students.find(s => s.id === id);
+    req.user = decoded;
+    next();
+  });
+}
 
-    if (!student) {
-        return res.status(404).json({
-            error: "Student not found"
-        });
-    }
-
-    return res.status(200).json(student);
+// GET /profile
+app.get("/profile", authenticateToken, (req, res) => {
+  return res.status(200).json({
+    username: req.user.username,
+  });
 });
 
-// DELETE /students/:id - Delete a student
-app.delete("/students/:id", (req, res) => {
-    const id = Number(req.params.id);
-    const index = students.findIndex(s => s.id === id);
+// Handle invalid JSON request bodies
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400) {
+    return res.status(400).json({
+      error: "Invalid input",
+    });
+  }
 
-    if (!Number.isInteger(id) || id <= 0 || index === -1) {
-        return res.status(404).json({
-            error: "Student not found"
-        });
-    }
-
-    students.splice(index, 1);
-
-    // 204 responses must have an empty body
-    return res.status(204).end();
+  next(err);
 });
 
-// Start server
 app.listen(PORT, () => {
-    console.log(`Student Records API running at http://localhost:${PORT}`);
+  console.log(`Server running at http://localhost:${PORT}`);
 });
